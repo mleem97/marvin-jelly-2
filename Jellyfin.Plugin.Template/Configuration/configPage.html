@@ -3,6 +3,11 @@
 <head>
     <meta charset="utf-8">
     <title>HDD Display</title>
+    <style>
+        .hdd-bar-wrap { background: #2b2b2b; border-radius: 6px; height: 12px; overflow: hidden; }
+        .hdd-bar { height: 12px; }
+        .hdd-color-dot { display: inline-block; width: 10px; height: 10px; border-radius: 999px; margin-right: 6px; }
+    </style>
 </head>
 <body>
     <div id="HddDisplayConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
@@ -62,6 +67,27 @@
                     </thead>
                     <tbody id="hddDisplayBody"></tbody>
                 </table>
+
+                <hr />
+
+                <h2>Usage by media type</h2>
+                <p>Based on Jellyfin indexed media items (no direct file scan).</p>
+
+                <div id="hddTypeLoading">Loading media type usage...</div>
+                <div id="hddTypeError" style="display:none;color:#ff6b6b;"></div>
+
+                <table class="tbl" id="hddTypeTable" style="display:none;width:100%;">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Items</th>
+                            <th>Size</th>
+                            <th>Share</th>
+                            <th>Visual</th>
+                        </tr>
+                    </thead>
+                    <tbody id="hddTypeBody"></tbody>
+                </table>
             </div>
         </div>
 
@@ -109,6 +135,47 @@
                     });
                 }
 
+                function renderTypeRows(items) {
+                    var body = document.querySelector('#hddTypeBody');
+                    body.innerHTML = '';
+
+                    items.forEach(function (item) {
+                        var row = document.createElement('tr');
+                        var pct = (item.SharePercent || 0).toFixed(2);
+                        var color = item.ColorHex || '#9aa0a6';
+                        row.innerHTML = ''
+                            + '<td><span class="hdd-color-dot" style="background:' + color + ';"></span>' + escapeHtml(item.DisplayName || '-') + '</td>'
+                            + '<td>' + (item.ItemCount || 0) + '</td>'
+                            + '<td>' + formatBytes(item.TotalBytes || 0) + '</td>'
+                            + '<td>' + pct + '%</td>'
+                            + '<td><div class="hdd-bar-wrap"><div class="hdd-bar" style="background:' + color + ';width:' + pct + '%;"></div></div></td>';
+                        body.appendChild(row);
+                    });
+                }
+
+                function loadMediaTypeUsage() {
+                    var loading = document.querySelector('#hddTypeLoading');
+                    var error = document.querySelector('#hddTypeError');
+                    var table = document.querySelector('#hddTypeTable');
+
+                    loading.style.display = 'block';
+                    error.style.display = 'none';
+                    table.style.display = 'none';
+
+                    return ApiClient.getJSON(ApiClient.getUrl('Plugins/HddDisplay/Storage/MediaTypeUsage'))
+                        .then(function (result) {
+                            renderTypeRows(result || []);
+                            table.style.display = 'table';
+                        })
+                        .catch(function () {
+                            error.textContent = 'Failed to load media type usage.';
+                            error.style.display = 'block';
+                        })
+                        .finally(function () {
+                            loading.style.display = 'none';
+                        });
+                }
+
                 function loadConfig() {
                     return ApiClient.getPluginConfiguration(HddDisplayConfig.pluginUniqueId).then(function (config) {
                         document.querySelector('#Options').value = config.Options;
@@ -143,7 +210,7 @@
 
                 document.querySelector('#HddDisplayConfigPage').addEventListener('pageshow', function () {
                     Dashboard.showLoadingMsg();
-                    Promise.all([loadConfig(), loadUsage()]).finally(function () {
+                    Promise.all([loadConfig(), loadUsage(), loadMediaTypeUsage()]).finally(function () {
                         Dashboard.hideLoadingMsg();
                     });
                 });
