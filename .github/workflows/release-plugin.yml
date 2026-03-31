@@ -56,7 +56,7 @@ jobs:
       - name: Generate release manifest with checksum
         shell: bash
         run: |
-          CHECKSUM="$(sha256sum "${ZIP_NAME}" | awk '{print $1}')"
+          CHECKSUM="$(md5sum "${ZIP_NAME}" | awk '{print toupper($1)}')"
           mkdir -p release-assets
           cp "${ZIP_NAME}" release-assets/
 
