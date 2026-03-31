@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using Jellyfin.Data.Enums;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Jellyfin.Plugin.Template.Api;
@@ -88,6 +91,103 @@ public class StorageUsageController : ControllerBase
         return Ok(entries.OrderBy(e => e.DriveName, GetStringComparer()).ToArray());
     }
 
+    /// <summary>
+    /// Gets media usage grouped by media type from Jellyfin indexed items.
+    /// </summary>
+    /// <returns>List of grouped usage entries by media type.</returns>
+    [HttpGet("MediaTypeUsage")]
+    public ActionResult<IReadOnlyList<MediaTypeUsageEntry>> GetMediaTypeUsage()
+    {
+        var query = new InternalItemsQuery
+        {
+            Recursive = true,
+            IncludeItemTypes = new[]
+            {
+                BaseItemKind.Movie,
+                BaseItemKind.Episode,
+                BaseItemKind.Audio,
+                BaseItemKind.Photo,
+                BaseItemKind.MusicVideo,
+                BaseItemKind.Video
+            }
+        };
+
+        var items = _libraryManager.GetItemList(query).ToArray();
+
+        var grouped = items
+            .GroupBy(GetMediaTypeKey)
+            .Select(g => new MediaTypeUsageEntry
+            {
+                Key = g.Key,
+                DisplayName = GetMediaTypeDisplayName(g.Key),
+                ColorHex = GetMediaTypeColor(g.Key),
+                ItemCount = g.Count(),
+                TotalBytes = g.Sum(GetItemSize)
+            })
+            .Where(x => x.ItemCount > 0)
+            .OrderByDescending(x => x.TotalBytes)
+            .ToList();
+
+        var allBytes = grouped.Sum(x => x.TotalBytes);
+        foreach (var entry in grouped)
+        {
+            entry.SharePercent = allBytes == 0 ? 0 : Math.Round((double)entry.TotalBytes / allBytes * 100, 2);
+        }
+
+        return Ok(grouped);
+    }
+
+    private static long GetItemSize(BaseItem item)
+    {
+        try
+        {
+            return item.Size ?? 0;
+        }
+        catch (Exception)
+        {
+            return 0;
+        }
+    }
+
+    private static string GetMediaTypeKey(BaseItem item)
+    {
+        var typeName = item.GetType().Name;
+        return typeName switch
+        {
+            "Movie" => "movie",
+            "Episode" => "series",
+            "Audio" => "music",
+            "Photo" => "images",
+            "MusicVideo" => "musicvideo",
+            "Video" => "video",
+            _ => "other"
+        };
+    }
+
+    private static string GetMediaTypeDisplayName(string key)
+        => key switch
+        {
+            "movie" => "Movies",
+            "series" => "Series / Episodes",
+            "music" => "Music",
+            "images" => "Images",
+            "musicvideo" => "Music Videos",
+            "video" => "Videos",
+            _ => "Other"
+        };
+
+    private static string GetMediaTypeColor(string key)
+        => key switch
+        {
+            "movie" => "#4f8cff",
+            "series" => "#37c978",
+            "music" => "#b076ff",
+            "images" => "#ff9f43",
+            "musicvideo" => "#ff5f7a",
+            "video" => "#00b8d9",
+            _ => "#9aa0a6"
+        };
+
     private static bool IsPathOnDrive(string path, string driveName)
     {
         if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(driveName))
@@ -113,9 +213,9 @@ public class StorageUsageController : ControllerBase
             normalizedDrive += "/";
         }
 
-        var comparer = GetStringComparison();
-        return normalizedPath.StartsWith(normalizedDrive, comparer)
-            || string.Equals(normalizedPath, normalizedDrive.TrimEnd('/'), GetStringComparison());
+        var comparison = GetStringComparison();
+        return normalizedPath.StartsWith(normalizedDrive, comparison)
+            || string.Equals(normalizedPath, normalizedDrive.TrimEnd('/'), comparison);
     }
 
     private static StringComparer GetPathComparer()
@@ -173,4 +273,40 @@ public class StorageUsageEntry
     /// Gets or sets Jellyfin library paths on this drive.
     /// </summary>
     public IReadOnlyList<string> LibraryPaths { get; set; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// Media type usage summary entry.
+/// </summary>
+public class MediaTypeUsageEntry
+{
+    /// <summary>
+    /// Gets or sets media type key.
+    /// </summary>
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets display name.
+    /// </summary>
+    public string DisplayName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets display color.
+    /// </summary>
+    public string ColorHex { get; set; } = "#9aa0a6";
+
+    /// <summary>
+    /// Gets or sets number of items.
+    /// </summary>
+    public int ItemCount { get; set; }
+
+    /// <summary>
+    /// Gets or sets total bytes of items in this media type.
+    /// </summary>
+    public long TotalBytes { get; set; }
+
+    /// <summary>
+    /// Gets or sets share in percent of all media-type bytes.
+    /// </summary>
+    public double SharePercent { get; set; }
 }
