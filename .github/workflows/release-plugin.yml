@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -99,3 +101,22 @@ jobs:
             release-assets/${{ env.ZIP_NAME }}
             release-assets/manifest.json
           generate_release_notes: true
+
+      - name: Update repository manifest.json on master
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          git fetch origin master
+          git checkout master
+          cp release-assets/manifest.json manifest.json
+
+          if git diff --quiet -- manifest.json; then
+            echo "No manifest changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "Update manifest for ${TAG_NAME} release"
+          git push origin master
