@@ -8,44 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  auto-tag:
-    if: github.ref == 'refs/heads/master' && !startsWith(github.event.head_commit.message, 'Update manifest for ')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Create and push next version tag
-        shell: bash
-        run: |
-          git fetch --tags --force
-          LATEST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
-
-          if [ -z "$LATEST_TAG" ]; then
-            NEW_TAG="v1.0.0.0"
-          else
-            VERSION="${LATEST_TAG#v}"
-            IFS='.' read -r MAJOR MINOR PATCH BUILD <<< "$VERSION"
-            MAJOR="${MAJOR:-1}"
-            MINOR="${MINOR:-0}"
-            PATCH="${PATCH:-0}"
-            BUILD="${BUILD:-0}"
-            BUILD=$((BUILD + 1))
-            NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}.${BUILD}"
-          fi
-
-          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
-            echo "Tag already exists: $NEW_TAG"
-            exit 0
-          fi
-
-          git tag "$NEW_TAG"
-          git push origin "$NEW_TAG"
-
   build-release:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       PLUGIN_GUID: eb5d7894-8eef-4b36-aa6f-5d124e828ce1
@@ -69,13 +33,45 @@ jobs:
       - name: Build
         run: dotnet build Jellyfin.Plugin.Template/Jellyfin.Plugin.Template.csproj -c Release --no-restore
 
-      - name: Prepare zip name
+      - name: Determine release tag and zip name
+        env:
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         shell: bash
         run: |
-          TAG_NAME="${GITHUB_REF_NAME}"
-          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "" ]; then
+          if [ "${GITHUB_REF}" = "refs/heads/master" ]; then
+            if [[ "${HEAD_COMMIT_MESSAGE}" == Update\ manifest\ for* ]]; then
+              echo "Manifest update commit detected, skipping release packaging run."
+              echo "SKIP_RELEASE=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
+
+            git fetch --tags --force
+            LATEST_TAG="$(git tag -l 'v*' --sort=-v:refname | head -n1)"
+            if [ -z "$LATEST_TAG" ]; then
+              TAG_NAME="v1.0.0.0"
+            else
+              VERSION_RAW="${LATEST_TAG#v}"
+              IFS='.' read -r MAJOR MINOR PATCH BUILD <<< "$VERSION_RAW"
+              MAJOR="${MAJOR:-1}"
+              MINOR="${MINOR:-0}"
+              PATCH="${PATCH:-0}"
+              BUILD="${BUILD:-0}"
+              BUILD=$((BUILD + 1))
+              TAG_NAME="v${MAJOR}.${MINOR}.${PATCH}.${BUILD}"
+            fi
+
+            if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+              echo "Tag already exists: $TAG_NAME"
+            else
+              git tag "$TAG_NAME"
+              git push origin "$TAG_NAME"
+            fi
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG_NAME="${GITHUB_REF_NAME}"
+          else
             TAG_NAME="manual-${GITHUB_RUN_NUMBER}"
           fi
+
           VERSION="${TAG_NAME#v}"
           ZIP_NAME="${PLUGIN_PACKAGE_PREFIX}_${VERSION}.zip"
           RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${ZIP_NAME}"
@@ -85,6 +81,7 @@ jobs:
           echo "RELEASE_URL=$RELEASE_URL" >> "$GITHUB_ENV"
 
       - name: Generate detailed changelog
+        if: env.SKIP_RELEASE != 'true'
         shell: bash
         run: |
           PREV_TAG="$(git tag --sort=-creatordate | grep -Fxv "${TAG_NAME}" | head -n1 || true)"
@@ -106,6 +103,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Create zip package
+        if: env.SKIP_RELEASE != 'true'
         shell: bash
         run: |
           mkdir -p package
@@ -119,6 +117,7 @@ jobs:
           zip -j "${ZIP_NAME}" "${FILES[@]}"
 
       - name: Generate release manifest with checksum
+        if: env.SKIP_RELEASE != 'true'
         shell: bash
         run: |
           CHECKSUM="$(md5sum "${ZIP_NAME}" | awk '{print toupper($1)}')"
@@ -176,13 +175,14 @@ jobs:
           PY
 
       - name: Upload build artifact
+        if: env.SKIP_RELEASE != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: plugin-package
           path: release-assets/
 
       - name: Create GitHub release and upload package
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.SKIP_RELEASE != 'true' && startsWith(env.TAG_NAME, 'v')
         uses: softprops/action-gh-release@v2
         with:
           body: ${{ env.CHANGELOG_TEXT }}
@@ -193,7 +193,7 @@ jobs:
           generate_release_notes: false
 
       - name: Update repository manifest.json on master
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.SKIP_RELEASE != 'true' && startsWith(env.TAG_NAME, 'v')
         shell: bash
         run: |
           git fetch origin master
