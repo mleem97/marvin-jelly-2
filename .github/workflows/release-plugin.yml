@@ -185,6 +185,8 @@ jobs:
         if: env.SKIP_RELEASE != 'true' && startsWith(env.TAG_NAME, 'v')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.TAG_NAME }}
           body: ${{ env.CHANGELOG_TEXT }}
           files: |
             release-assets/${{ env.ZIP_NAME }}
